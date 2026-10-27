@@ -2,10 +2,17 @@ import datetime, ipaddress, json, os, re, socket, ssl, sys, time, urllib.parse, 
 from concurrent.futures import ThreadPoolExecutor
 
 KEEP = 50
-MAX_CANDS = 3000
+MAX_CANDS = 10000
 HOST = "speed.cloudflare.com"
 KEYWORDS = ["proxyip", "cf proxyip", "优选 proxyip"]
+ASIA = {"SG", "JP", "HK", "KR", "TW"}
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
+
+# 固定来源：想加来源就在这里加一行链接（行末要有逗号）
+EXTRA_SOURCES = [
+    "https://ipdb.api.030101.xyz/?type=bestproxy;proxy&country=true",
+    "https://ipdb.api.030101.xyz/?type=proxy&country=true",
+]
 
 def get(url, api=False):
     h = {"User-Agent": "Mozilla/5.0"}
@@ -41,21 +48,24 @@ for kw in KEYWORDS:
                 n += 1
         time.sleep(1)
 
-# 2. 手动来源
+# 2. 固定来源 + 可选的 sources.txt（有就读，没有就跳过）
+urls.update(EXTRA_SOURCES)
+manual = ""
 if os.path.exists("sources.txt"):
     for line in open("sources.txt").read().splitlines():
         line = line.strip()
-        if line and not line.startswith("#"):
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("http"):
             urls.add(line)
+        else:
+            manual += line + "\n"
 print("来源文件数:", len(urls))
 
 # 3. 提取候选
 cands = set()
-for u in urls:
-    try:
-        text = get(u)
-    except Exception:
-        continue
+
+def extract(text):
     for ip, port in re.findall(r"(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{2,5}))?", text):
         try:
             a = ipaddress.ip_address(ip)
@@ -64,6 +74,13 @@ for u in urls:
         if a.is_private or any(a in n for n in nets):
             continue
         cands.add((ip, int(port) if port else 443))
+
+for u in urls:
+    try:
+        extract(get(u))
+    except Exception:
+        continue
+extract(manual)
 cands = list(cands)[:MAX_CANDS]
 print("候选:", len(cands))
 
@@ -99,5 +116,11 @@ print("可用:", len(ok))
 if not ok:
     sys.exit("没有可用 ProxyIP，不更新文件")
 
+# 5. 亚洲优先，不够 KEEP 个就用其他地区（主要是美国）按延迟补满
+asia = [r for r in ok if r[3] in ASIA]
+rest = [r for r in ok if r[3] not in ASIA]
+final = (asia + rest)[:KEEP]
+print("亚洲可用:", len(asia), "其他可用:", len(rest), "最终写入:", len(final))
+
 with open("ProxyIPs", "w") as f:
-    f.write("\n".join(f"{ip}:{port}#{loc}" for _, ip, port, loc in ok[:KEEP]) + "\n")
+    f.write("\n".join(f"{ip}:{port}#{loc}" for _, ip, port, loc in final) + "\n")
