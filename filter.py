@@ -5,7 +5,9 @@ KEEP = 50
 MAX_CANDS = 10000
 HOST = "speed.cloudflare.com"
 KEYWORDS = ["proxyip", "cf proxyip", "优选 proxyip"]
-ASIA = {"SG", "JP", "HK", "KR", "TW"}
+ASIA_ORDER = ["SG", "JP", "HK", "KR", "TW"]  # 输出顺序
+ASIA = set(ASIA_ORDER)
+PER_REGION = 10  # 每个亚洲地区最多先取几个
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 # 固定来源：想加来源就在这里加一行链接（行末要有逗号）
@@ -116,11 +118,29 @@ print("可用:", len(ok))
 if not ok:
     sys.exit("没有可用 ProxyIP，不更新文件")
 
-# 5. 亚洲优先，不够 KEEP 个就用其他地区（主要是美国）按延迟补满
-asia = [r for r in ok if r[3] in ASIA]
-rest = [r for r in ok if r[3] not in ASIA]
-final = (asia + rest)[:KEEP]
-print("亚洲可用:", len(asia), "其他可用:", len(rest), "最终写入:", len(final))
+# 5. 每个亚洲地区先各取 PER_REGION 个，剩余名额先用其余亚洲 IP 补，再用美国等其他地区补
+final, used = [], set()
+for cc in ASIA_ORDER:
+    for r in [x for x in ok if x[3] == cc][:PER_REGION]:
+        final.append(r)
+        used.add((r[1], r[2]))
+for r in ok:  # ok 已按延迟排序：先补亚洲，再补其他
+    if len(final) >= KEEP:
+        break
+    if (r[1], r[2]) not in used and r[3] in ASIA:
+        final.append(r)
+        used.add((r[1], r[2]))
+for r in ok:
+    if len(final) >= KEEP:
+        break
+    if (r[1], r[2]) not in used:
+        final.append(r)
+        used.add((r[1], r[2]))
+final = final[:KEEP]
+counts = {}
+for r in final:
+    counts[r[3]] = counts.get(r[3], 0) + 1
+print("各地区数量:", counts, "最终写入:", len(final))
 
 with open("ProxyIPs", "w") as f:
     f.write("\n".join(f"{ip}:{port}#{loc}" for _, ip, port, loc in final) + "\n")
